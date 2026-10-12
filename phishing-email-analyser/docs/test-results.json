@@ -1,0 +1,93 @@
+{
+  "release": "v5.0",
+  "tested": "2026-10-09",
+  "node_version": "v22.16.0",
+  "conventional_tests": 623,
+  "fuzz_property_checks": 604,
+  "total_checks": 1227,
+  "suites": [
+    {
+      "suite": "run-tests",
+      "passed": 94,
+      "duration_ms": 191,
+      "output_summary": "94 passed, 0 failed"
+    },
+    {
+      "suite": "domain-security-tests",
+      "passed": 66,
+      "duration_ms": 284,
+      "output_summary": "Domain security: 66 passed, 0 failed"
+    },
+    {
+      "suite": "url-security-tests",
+      "passed": 26,
+      "duration_ms": 122,
+      "output_summary": "URL security: 26 passed, 0 failed"
+    },
+    {
+      "suite": "advanced-security-tests",
+      "passed": 36,
+      "duration_ms": 163,
+      "output_summary": "Advanced security total: 36 passed"
+    },
+    {
+      "suite": "release-hardening-tests",
+      "passed": 24,
+      "duration_ms": 410,
+      "output_summary": "Release hardening: 24 passed"
+    },
+    {
+      "suite": "secure-property-tests",
+      "passed": 604,
+      "duration_ms": 762,
+      "output_summary": "Property/fuzz checks: 604 passed; elapsed 669ms; seed 0x59F3A"
+    },
+    {
+      "suite": "adversarial-tests",
+      "passed": 360,
+      "duration_ms": 317,
+      "output_summary": "Adversarial security suite: 360 passed (including 320 deterministic mutations)"
+    },
+    {
+      "suite": "deployment-policy-tests",
+      "passed": 17,
+      "duration_ms": 39,
+      "output_summary": "Deployment policy: 17 passed"
+    }
+  ],
+  "synthetic_benchmark": {
+    "note": "Synthetic engineering smoke only, not externally validated phishing accuracy",
+    "count": 20,
+    "confusion": {
+      "tp": 9,
+      "tn": 10,
+      "fp": 0,
+      "fn": 1
+    }
+  },
+  "browser_verification": {
+    "status": "passed",
+    "checks": [
+      "initial report",
+      "IDN impersonation evidence",
+      "coverage banner",
+      "body-header spoof rejection",
+      "dashboard navigation",
+      "training navigation",
+      "no page exceptions"
+    ],
+    "qr_native_available": false,
+    "qr_decoder_included": false,
+    "context": "local-asset controlled browser harness; not a deployed-CSP or full penetration test"
+  },
+  "known_missing": [
+    "Independent real-world labeled benchmark",
+    "Native QR decoding in tested Chromium without optional vendored decoder",
+    "Trusted-domain ownership validation",
+    "Full standards-conformant Unicode UTS #39 detection",
+    "Deployed CSP response header test",
+    "Live reputation or malware scanning"
+  ],
+  "documentation": "Repository root README.md (single Markdown source)",
+  "files_consolidated": true
+}

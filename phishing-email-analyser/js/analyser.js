@@ -20,8 +20,8 @@
   function decodeEntities(s) {
     return s.replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
       .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
-      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
-      .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Math.min(+n || 0, 0x10ffff)))
+      .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Math.min(parseInt(n, 16) || 0, 0x10ffff)))
       .replace(/&amp;/gi, '&');
   }
 
@@ -34,8 +34,11 @@
   function normaliseInput(raw) {
     const anchors = [];
     let text = raw.replace(/\r\n?/g, '\n');
-    const looksHtml = /<\s*(html|body|div|p|a|table|span|br)\b/i.test(text);
+    const looksHtml = /<\s*(html|body|div|p|a|table|span|br|form|input|meta|img|section|main)\b/i.test(text);
     if (looksHtml) {
+      // Non-rendered HTML must not create fictitious phishing language/URLs.
+      text = text.replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
+        .replace(/<(script|style|head|template|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
       const aRe = /<a\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/gi;
       let m;
       while ((m = aRe.exec(text))) {
@@ -52,10 +55,11 @@
 
   /** "login.secure.paypal.co.uk" → "paypal.co.uk" (the part someone actually registered). */
   function registrableDomain(host) {
-    host = (host || '').toLowerCase().replace(/\.$/, '');
-    if (isIp(host)) return host;
-    const parts = host.split('.');
-    if (parts.length <= 2) return host;
+    const h = (host || '').toLowerCase().replace(/\.$/, '');
+    if (isIp(h)) return h;
+    if (P.publicSuffix) return P.publicSuffix.registrableDomain(h);
+    const parts = h.split('.');
+    if (parts.length <= 2) return h;
     const lastTwo = parts.slice(-2).join('.');
     if (P.MULTI_SUFFIXES.includes(lastTwo)) return parts.slice(-3).join('.');
     return lastTwo;
@@ -114,8 +118,9 @@
         break;
       }
     }
-    if (host.split('.').some(l => l.startsWith('xn--')))
-      issues.push({ type: 'punycode', weight: 25, title: 'Internationalised (punycode) domain', detail: `"${host}" uses special characters that can look identical to normal letters (e.g. Cyrillic "а" instead of Latin "a").` });
+    // The dedicated Unicode investigator only scores IDNs when impersonation
+    // evidence exists; legitimate internationalized domains are not malware.
+    if (P.domainSecurity) issues.push(...P.domainSecurity.issues(host, reg));
     if (P.RISKY_TLDS.includes(tld))
       issues.push({ type: 'risky-tld', weight: 10, title: 'Frequently abused domain ending', detail: `".${tld}" domains are cheap and heavily used in phishing campaigns. Not proof on its own.` });
     if (P.ABUSED_HOSTS.some(h => host === h || host.endsWith('.' + h)))
@@ -125,7 +130,10 @@
 
   // ── URL extraction & analysis ───────────────────────────────────────────────
 
-  const URL_RE = /\b(?:(?:https?|hxxps?|ftp):\/\/|www\.)[^\s<>"'`)\]}]+|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\/[^\s<>"'`)\]}]*|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\/[^\s<>"'`)\]}]*/gi;
+  const URL_RE = /(?:\b(?:https?|hxxps?|ftp):\/\/|\bwww\.)[^\s<>"'`)\]}]+|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\/[^\s<>"'`)\]}]*|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[\p{L}]{2,24}\/[^\s<>"'`)\]}]*/giu;
+  // Bare non-ASCII domains without a /path are also valuable evidence. Exclude
+  // email-address suffixes and files; leave normal ASCII naked domains alone.
+  const BARE_IDN_RE = /(?<![\p{L}\p{N}@.-])(?:[\p{L}\p{N}-]+\.)+[\p{L}]{2,24}(?![\p{L}\p{N}-])/gu;
 
   function cleanUrlText(u) { return u.replace(/[.,;:!?]+$/, ''); }
 
@@ -146,6 +154,7 @@
     }
     const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     const reg = registrableDomain(host);
+    const unicodeHost = P.domainSecurity ? P.domainSecurity.decodeHost(host) : host;
 
     if (P.SHORTENERS.includes(host) || P.SHORTENERS.includes(reg))
       issues.push({ type: 'shortener', weight: 18, title: 'Shortened link hides the real destination', detail: `"${host}" is a link-shortening service. You cannot see where it really leads without clicking.` });
@@ -164,13 +173,14 @@
       issues.push({ type: 'long-url', weight: 4, title: 'Very long link', detail: 'Very long links can hide the real destination or carry tracking IDs.' });
 
     issues.push(...domainIssues(host));
+    if (P.urlSecurity) issues.push(...P.urlSecurity.inspect(u.href));
 
     const official = Object.keys(P.BRANDS).some(b => isOfficial(b, reg));
     if (!official && /(log-?in|sign-?in|verify|verification|secure|account|update|wallet|password|banking|webscr|auth)/i.test(u.pathname + u.hostname))
       issues.push({ type: 'login-words', weight: 8, title: 'Login or security words in an unknown domain', detail: 'Words like "login", "verify" or "secure" in the address are used to make a fake page look official.' });
 
     if (extra) issues.push(...extra);
-    return { raw, host, reg, issues };
+    return { raw, host, unicodeHost, reg, issues };
   }
 
   /** Find every link in the text plus every <a href> from HTML input, and spot misleading link text. */
@@ -208,6 +218,13 @@
       if (/^[\w.-]+\.(png|jpe?g|gif|pdf|docx?|xlsx?)\/?$/i.test(raw)) continue;
       const pe = pairExtra.get(raw.toLowerCase());
       add(raw, m.index, m.index + raw.length, pe ? pe.extra : null, pe ? pe.shown : null);
+    }
+    BARE_IDN_RE.lastIndex = 0;
+    while ((m = BARE_IDN_RE.exec(text))) {
+      if ((/[^\x00-\x7f]/.test(m[0]) || /(?:^|\.)xn--/i.test(m[0])) &&
+          !out.some(u => u.start >= 0 && u.start <= m.index && u.end >= m.index + m[0].length) &&
+          !seen.has(m[0].toLowerCase()))
+        add(m[0], m.index, m.index + m[0].length, null, null);
     }
     for (const a of anchors) {
       const pe = pairExtra.get(cleanUrlText(a.href).toLowerCase());
@@ -280,9 +297,26 @@
     return { display: display === email ? '' : display, email, domain: email.split('@')[1] || '' };
   }
 
+  // Header-looking lines *inside the body* are untrusted message content.
+  // Only the initial RFC-style header block may influence sender/authentication
+  // assessment. This still accepts header-only copies without a blank line.
+  function headerBlock(text) {
+    if (typeof text !== 'string' || !/^(?:From|Reply-To|Return-Path|To|Subject|Date|Authentication-Results|ARC-Authentication-Results|Received-SPF):[ \t]/i.test(text)) return '';
+    const head = text.split(/\n[ \t]*\n/, 1)[0].slice(0, 65536);
+    const lines = head.split('\n');
+    const valid = /^[-A-Za-z0-9]+:[ \t]/;
+    const continuation = /^[ \t]/;
+    let end = 0;
+    for (const line of lines) {
+      if (!valid.test(line) && !(end && continuation.test(line))) break;
+      end++;
+    }
+    return lines.slice(0, end).join('\n');
+  }
   function getHeader(text, name) {
-    const re = new RegExp('^' + name + ':[ \\t]*(.*(?:\\n[ \\t]+.*)*)', 'im');
-    const m = text.match(re);
+    const head = headerBlock(text);
+    const re = new RegExp('^' + name + ':[ \t]*(.*(?:\n[ \t]+.*)*)', 'im');
+    const m = head.match(re);
     return m ? m[1].replace(/\n[ \t]+/g, ' ').trim() : null;
   }
 
@@ -322,13 +356,13 @@
         add('sender-' + iss.type, iss.weight, 'Sender domain: ' + iss.title.toLowerCase(), iss.detail, 'The sender\'s own domain shows the same tricks used in fake links.');
     }
     const authRes = (k) => { const m = auth.match(new RegExp('\\b' + k + '\\s*=\\s*(\\w+)', 'i')); return m ? m[1].toLowerCase() : null; };
-    const spf = authRes('spf') || (/received-spf/i.test(text) ? (auth.match(/\b(pass|fail|softfail|neutral|none)\b/i) || [])[1] : null);
+    const spf = authRes('spf') || (getHeader(text, 'Received-SPF') ? (getHeader(text, 'Received-SPF').match(/^(pass|fail|softfail|neutral|none)\b/i) || [])[1] : null);
     const dkim = authRes('dkim'), dmarc = authRes('dmarc');
-    if (spf && /fail/.test(spf)) add('spf-fail', 18, 'SPF check failed', `spf=${spf}`, 'SPF lists which servers may send mail for a domain. A failure means this email came from a server the domain did not authorise.');
-    if (dkim && /fail/.test(dkim)) add('dkim-fail', 15, 'DKIM signature failed', `dkim=${dkim}`, 'DKIM is a digital signature. A failure means the email was altered or not signed by the claimed domain.');
-    if (dmarc && /fail/.test(dmarc)) add('dmarc-fail', 22, 'DMARC check failed', `dmarc=${dmarc}`, 'DMARC ties SPF/DKIM to the visible From address. A failure strongly suggests the sender address is forged.');
+    if (spf && /fail/.test(spf)) add('spf-fail', 18, 'SPF check failed', `spf=${spf}`, 'The supplied headers REPORT an SPF failure. Authentication-Results text can be forged; verify the result in your trusted receiving mail system.');
+    if (dkim && /fail/.test(dkim)) add('dkim-fail', 15, 'DKIM signature failed', `dkim=${dkim}`, 'The supplied headers REPORT a DKIM failure. This app does not verify signatures; check trusted mail-gateway logs.');
+    if (dmarc && /fail/.test(dmarc)) add('dmarc-fail', 22, 'DMARC check failed', `dmarc=${dmarc}`, 'The supplied headers REPORT a DMARC failure, not independently confirmed by this app. Inspect trusted receiver authentication results.');
     if (spf === 'pass' && dkim === 'pass' && dmarc === 'pass')
-      positives.push('SPF, DKIM and DMARC all passed. The email really came from the domain shown, but attackers can also register their own domains, so check the domain itself.');
+      positives.push('Supplied headers REPORT SPF, DKIM and DMARC pass; these are unverified claims, not proof of identity. Verify using your trusted mail provider and review the actual sender domain.');
     return { findings, positives, from, replyTo };
   }
 
@@ -338,9 +372,26 @@
    * analyse(rawText, mode) → report
    * mode: 'email' (default) or 'voice' (a call transcript)
    */
-  function analyse(rawText, mode) {
+  function analyse(rawText, mode, context) {
     mode = mode === 'voice' ? 'voice' : 'email';
-    const { text, anchors, wasHtml } = normaliseInput(rawText || '');
+    const INPUT_LIMIT = 512 * 1024;
+    const supplied = typeof rawText === 'string' ? rawText : String(rawText || '');
+    const truncated = supplied.length > INPUT_LIMIT;
+    const limitedInput = truncated ? supplied.slice(0, INPUT_LIMIT) : supplied;
+    // Long unbroken attacker-controlled tokens can cause quadratic work in
+    // extraction regexes even when total input is bounded. Keep a prefix,
+    // explicitly mark coverage incomplete and never pronounce a safe verdict.
+    let longTokenCount = 0;
+    const inspectedInput = limitedInput.replace(/\S{1025,}/g, token => {
+      longTokenCount++;
+      return token.slice(0, 1024) + ' ';
+    });
+    const { text, anchors, wasHtml } = normaliseInput(inspectedInput);
+    const coverage = { complete: !truncated && !longTokenCount, inputCharacters: supplied.length,
+      analysedCharacters: inspectedInput.length, messages: [] };
+    if (truncated) coverage.messages.push('Only the first 512 KiB of input was inspected. Later indicators may have been missed.');
+    if (longTokenCount) coverage.messages.push(longTokenCount + ' oversized unbroken token(s) shortened to protect the analyzer from resource exhaustion; hidden indicators may have been missed.');
+    if (!coverage.complete) coverage.messages.push('This is a partial scan, NOT a safe verdict.');
     const findings = [];
     const spans = []; // where to highlight evidence in the text
 
@@ -393,6 +444,34 @@
     const hdr = mode === 'email' ? analyseHeaders(text) : { findings: [], positives: [], from: null };
     findings.push(...hdr.findings);
 
+    // 4b) Static HTML source, including MIME HTML retained by the .eml parser.
+    const htmlSource = context && typeof context.html === 'string' && context.html.trim() ? context.html : (wasHtml ? inspectedInput : '');
+    const htmlInvestigation = mode === 'email' && P.htmlSecurity ? P.htmlSecurity.inspect(htmlSource) : {findings:[],urls:[],truncated:false};
+    for (const item of htmlInvestigation.findings) {
+      findings.push({id:'html-'+item.type,skill:'links',weight:item.weight,title:item.title,
+        evidence:item.url?[item.url]:[],explain:item.detail,group:'HTML source'});
+    }
+    // Independently evaluate URLs that HTML source contains, even if the plain
+    // text representation omits them. Do not trust an anchor's displayed text.
+    for (const rawUrl of [...new Set(htmlInvestigation.urls)].slice(0,50)) {
+      if (urls.some(x=>x.raw===rawUrl)) continue;
+      const u=analyseUrl(rawUrl);u.start=-1;u.end=-1;u.source='html'; urls.push(u);
+      for (const item of u.issues) if (!findings.some(f=>f.id==='html-url-'+item.type))
+        findings.push({id:'html-url-'+item.type,skill:'links',weight:item.weight,
+          title:item.title,evidence:[rawUrl],explain:item.detail,group:'HTML source'});
+    }
+    // QR results are injected by an asynchronous, user-initiated local scan.
+    const qrResults = context && Array.isArray(context.qrResults) ? context.qrResults.slice(0,12) : [];
+    for (const qr of qrResults) if (qr && qr.url && typeof qr.value==='string') {
+      const u=analyseUrl(qr.value);u.start=-1;u.end=-1;u.source='qr'; urls.push(u);
+      findings.push({id:'qr-embedded-link',skill:'links',weight:0,title:'QR code contains a web link',
+        evidence:[qr.value],explain:'The URL was decoded locally from image pixels without visiting it. A QR link alone does not prove phishing.',group:'QR code'});
+      for (const item of u.issues) if (!findings.some(f=>f.id==='qr-'+item.type))
+        findings.push({id:'qr-'+item.type,skill:'links',weight:item.weight,title:'QR: '+item.title,
+          evidence:[qr.value],explain:item.detail,group:'QR code'});
+    }
+
+
     // 5) Combinations that are much more dangerous together
     const has = id => findings.some(f => f.id === id);
     const hasSkill = s => findings.some(f => f.skill === s);
@@ -416,7 +495,7 @@
 
     const skills = [...new Set(findings.map(f => f.skill))];
     return {
-      mode, text, wasHtml, score, level, raw, findings, urls, attachments,
+      mode, text, wasHtml, htmlInvestigation, qrResults, score, level, raw, findings, urls, attachments, coverage,
       headers: { from: hdr.from, positives: hdr.positives },
       spans, skills, iocs: extractIocs(text, urls, attachments, hdr.from), analysedAt: new Date().toISOString()
     };

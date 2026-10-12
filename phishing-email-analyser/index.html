@@ -65,6 +65,9 @@
           <label for="eml-file" class="dz-label"><b>Drop an .eml file here</b> or click to browse</label>
           <p class="hint">Opened and read inside this browser tab only. It is never uploaded.</p>
           <p class="hint" id="eml-status" role="status"></p>
+          <div class="qr-tools"><label for="qr-file"><b>Optional: scan a QR code locally</b></label>
+          <input id="qr-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+          <p class="hint" id="qr-status" role="status">QR decoding requires a browser with BarcodeDetector support. No links are opened.</p></div>
         </div>
 
         <label for="email-input" class="field-label" id="input-label">Paste the suspicious email: headers, body, links and attachment names</label>
@@ -88,7 +91,7 @@
           <h2>What this checks</h2>
           <ul class="check-list">
             <li><b>Language</b>: urgency, threats, requests for passwords, MFA codes, payments, gift cards and bank-detail changes</li>
-            <li><b>Links</b>: look-alike domains, shortened links, raw IP addresses, "@" tricks and link text that lies about its destination</li>
+            <li><b>Links</b>: look-alike domains (including Unicode homographs and Punycode IDNs), shortened links, raw IP addresses, "@" tricks and misleading link text</li>
             <li><b>Attachments</b>: executables, double extensions, macro documents and "Enable Content" requests</li>
             <li><b>Sender</b>: SPF/DKIM/DMARC failures, Reply-To mismatches and fake display names</li>
             <li><b>Voice calls</b>: impersonated banks and IT staff, "safe accounts" and remote-access requests</li>
@@ -144,8 +147,12 @@
     <h3>What is stored</h3>
     <p>If you leave the checkbox ticked, the analyser saves a small summary of each analysis in your browser's local storage: the date, the score, and the names of the warning signs. It never saves the message itself. Challenge answers and training progress are stored the same way. Use the button below to delete all of it.</p>
     <p><button type="button" class="btn danger" id="wipe-btn">Delete all data stored by this site</button> <span id="wipe-status" class="hint" role="status"></span></p>
+    <h3>Incomplete scans and copied email headers</h3>
+    <p>Long messages, oversized tokens and complex MIME files are subject to processing limits to prevent resource exhaustion. When not all content could be inspected, the report displays an explicit warning. SPF/DKIM/DMARC strings pasted from an email are <b>unverified header claims</b>, not proof of authentication; confirm them through the trusted receiving mail provider.</p>
     <h3>How the score works</h3>
     <p>Each warning sign has a weight that reflects how strongly it predicts phishing. A password request counts far more than a generic greeting. Signs that are much more dangerous together, such as a credential request plus a fake link, add a bonus. The total is converted to a 0–100 scale: <b>Low</b> (0–19), <b>Medium</b> (20–44), <b>High</b> (45–69), <b>Critical</b> (70–100).</p>
+    <h3>Unicode homograph / brand impersonation checks</h3>
+    <p>The enhanced investigator inspects locally submitted QR image content when a decoder is available, checks HTML destination attributes, uses a bundled Public Suffix List snapshot, decodes internationalized domain names and checks for selected visually confusable Unicode characters, unusual script mixing, spoofed trusted-domain fragments, and deceptive hosted subdomains. When it finds a brand lookalike, the report identifies Unicode code points and explains the trust-boundary mismatch. <b>International characters and Punycode are not inherently dangerous.</b> The implementation uses a wider ICU-derived confusable mapping with audited overrides and an optional updater for current Unicode UTS #39 data. It does not claim full Unicode UTS #39 conformance. It cannot establish who registered a domain or what a website contains.</p>
     <h3>Limits</h3>
     <p>This is a rule-based teaching tool, not a security product. It can miss well-crafted attacks and can flag legitimate messages. It never visits links, so it cannot see what a website actually contains. A low score is not proof that a message is safe. When in doubt, verify through a channel you trust and report it to your security team.</p>
   </section>
@@ -159,7 +166,15 @@
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <!--@@BODY_END@@-->
 <script src="js/rules.js"></script>
+<script src="js/psl-data.js"></script>
+<script src="js/public-suffix.js"></script>
+<script src="js/confusables-data.js"></script>
+<script src="js/domain-security.js"></script>
+<script src="js/url-security.js"></script>
 <script src="js/analyser.js"></script>
+<script src="js/html-security.js"></script>
+<!-- Optional offline jsQR decoder may be installed by tools/vendor-qr-decoder.py. -->
+<script src="js/qr-security.js"></script>
 <script src="js/guidance.js"></script>
 <script src="js/content.js"></script>
 <script src="js/core.js"></script>

@@ -67,6 +67,7 @@
     const ex = P.EXAMPLES.find(x => x.id === sel.value);
     if (!ex) return;
     setMode(ex.mode);
+    generation++;analysisContext={html:'',qrResults:[]};
     $('email-input').value = ex.text;
     sel.value = '';
     run(false);
@@ -74,23 +75,62 @@
 
   // ── .eml import ──────────────────────────────────────────────────────────
   // FileReader hands the file's bytes to this tab only; nothing is sent anywhere (the CSP would block it).
+  let analysisContext = {html:'',qrResults:[]};
+  let generation = 0;
+  async function inspectImages(blobs, version) {
+    const unique=[];
+    const errors=[];
+    if (!P.qrSecurity || !P.qrSecurity.supported()) {
+      $('qr-status').textContent='QR decoding unavailable in this browser; static URL and email analysis remains available.';
+      return;
+    }
+    for (const blob of blobs.slice(0,4)) {
+      const result=await P.qrSecurity.inspectImage(blob);
+      if (version!==generation) return;
+      if (result.status==='ok') unique.push(...result.codes.filter(c=>c.url));
+      else errors.push(result.status);
+    }
+    if (version!==generation) return;
+    analysisContext.qrResults=[...new Map(unique.map(x=>[x.value,x])).values()].slice(0,12);
+    $('qr-status').textContent=analysisContext.qrResults.length
+      ? `${analysisContext.qrResults.length} QR URL(s) decoded locally; included in the analysis.`
+      : errors.length ? `QR inspection incomplete (${[...new Set(errors)].join(', ')}). No safe verdict is possible.`
+      : 'No QR URL detected in selected images. This does not prove the images are safe.';
+    if ($('email-input').value.trim() || analysisContext.qrResults.length) run(false,true);
+  }
+  $('qr-file').addEventListener('change',e=>{
+    const f=e.target.files[0];e.target.value='';if (!f)return;
+    generation++; const version=generation;
+    analysisContext.qrResults=[];
+    inspectImages([f],version);
+  });
+  $('email-input').addEventListener('input',()=>{generation++; analysisContext={html:'',qrResults:[]};});
   const EML_MAX_BYTES = 25 * 1024 * 1024; // the usual mail-server size limit
   function importEml(file) {
     if (!file) return;
+    const fileVersion = ++generation; // discard a stale read after edit, reset, or newer file
     if (!/\.eml$/i.test(file.name) && file.type !== 'message/rfc822') { P.toast('That is not an .eml file.'); return; }
     if (file.size > EML_MAX_BYTES) { P.toast('That file is over 25 MB. Too large to open here.'); return; }
     const reader = new FileReader();
     reader.onerror = () => P.toast('Could not read that file.');
     reader.onload = () => {
+      if (fileVersion !== generation) return;
       let parsed;
       try { parsed = P.parseEml(reader.result); } catch (e) { P.toast('That file could not be read as an email.'); return; }
       if (!parsed.text.trim()) { P.toast('No readable text was found in that file.'); return; }
       setMode('email');
+      generation++; const version=generation;
+      analysisContext={html:parsed.html||'',qrResults:[],mimeLimited:!!parsed.limited};
       $('email-input').value = parsed.text;
       $('eml-status').replaceChildren(
         h('b', {}, file.name), ' · body from ', parsed.source === 'none' ? 'headers only' : parsed.source,
         parsed.files.length ? ` · ${parsed.files.length} attachment${parsed.files.length === 1 ? '' : 's'} listed` : null);
       run(false, true);
+      if (parsed.images && parsed.images.length) {
+        const images=parsed.images.map(i=>new Blob([i.bytes],{type:i.mime}));
+        $('qr-status').textContent=`Checking ${images.length} embedded image(s) for QR codes locally…`;
+        inspectImages(images,version);
+      }
       P.toast('Loaded ' + file.name + ' (read locally, not uploaded)');
     };
     reader.readAsArrayBuffer(file);
@@ -117,6 +157,8 @@
   }
 
   $('clear-btn').addEventListener('click', () => {
+    generation++;analysisContext={html:'',qrResults:[]};
+    $('qr-status').textContent='No QR images loaded.';
     $('email-input').value = ''; $('eml-status').textContent = '';
     $('report-body').hidden = true; $('empty-state').hidden = false;
     lastReport = null;
@@ -128,8 +170,10 @@
   // fromFile: the text came from the user's own .eml, so don't label the report a "built-in example".
   function run(record, fromFile) {
     const text = $('email-input').value;
-    if (!text.trim()) { P.toast('Paste a message first, or pick an example.'); $('email-input').focus(); return; }
-    const report = P.analyse(text, mode);
+    if (!text.trim() && !analysisContext.qrResults.length) { P.toast('Paste a message, upload an email, or decode a QR image first.'); $('email-input').focus(); return; }
+    const report = P.analyse(text, mode, analysisContext);
+    if (analysisContext.mimeLimited) { report.coverage.complete = false;
+      report.coverage.messages.push('MIME parsing reached a safety limit; not all email parts were inspected.'); }
     lastReport = report;
     render(report, !record && !fromFile);
     if (record && $('save-history').checked) {
@@ -155,9 +199,9 @@
   }
 
   function headline(r) {
-    const n = r.findings.length;
-    if (r.level === 'Critical') return 'Very likely a phishing attempt';
-    if (r.level === 'High') return 'Strong signs of phishing';
+    const n = r.findings.filter(f => f.weight > 0).length;
+    if (r.level === 'Critical') return 'Multiple high-severity phishing indicators';
+    if (r.level === 'High') return 'Strong phishing indicators present';
     if (r.level === 'Medium') return 'Some warning signs. Verify before acting';
     return n ? 'Few warning signs found' : 'No common warning signs found';
   }
@@ -182,13 +226,16 @@
   }
 
   function findingsCard(r) {
-    const groups = ['Patterns', 'Language', 'Links', 'Attachments', 'Sender'];
+    // Include future/new investigator categories. an earlier release omitted HTML and
+    // QR findings from the explanatory panel despite scoring them.
+    const preferred = ['Patterns', 'Language', 'Links', 'HTML source', 'QR code', 'Attachments', 'Sender'];
+    const groups = [...new Set([...preferred, ...r.findings.map(f => f.group || 'Other')])];
     const card = h('section', { class: 'card' },
-      h('h3', {}, 'Why it is suspicious', h('span', { class: 'count' }, `${r.findings.length} warning sign${r.findings.length === 1 ? '' : 's'}`)),
+      h('h3', {}, 'Why it is suspicious', h('span', { class: 'count' }, `${r.findings.filter(f => f.weight > 0).length} weighted finding${r.findings.filter(f => f.weight > 0).length === 1 ? '' : 's'}`)),
       h('p', { class: 'sub' }, 'Open any item to see the evidence and an explanation. The number is how much it added to the risk.'));
     if (!r.findings.length) card.append(h('p', { class: 'empty' }, 'Nothing matched the analyser\'s rules. That does not prove the message is safe.'));
     for (const g of groups) {
-      const items = r.findings.filter(f => f.group === g);
+      const items = r.findings.filter(f => (f.group || 'Other') === g);
       if (!items.length) continue;
       card.append(h('div', { class: 'findings' },
         h('div', { class: 'group-label' }, g === 'Patterns' ? 'Attack patterns' : g),
@@ -213,9 +260,11 @@
     if (r.urls.length) card.append(h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Link'), h('th', {}, 'Real owner'), h('th', {}, 'Verdict'))),
       h('tbody', {}, r.urls.map(u => h('tr', {},
-        h('td', { class: 'mono' }, u.raw, u.shownAs ? h('div', { class: 'hint' }, 'Shown as: "' + u.shownAs + '"') : null),
+        h('td', { class: 'mono' }, u.raw,
+          u.unicodeHost && u.host !== u.unicodeHost ? h('div', { class: 'hint' }, 'Decoded IDN: ' + u.unicodeHost + ' (ASCII: ' + u.host + ')') : null,
+          u.shownAs ? h('div', { class: 'hint' }, 'Shown as: "' + u.shownAs + '"') : null),
         h('td', { class: 'mono' }, u.reg || '—'),
-        h('td', {}, u.issues.length ? h('span', { class: 'bad' }, u.issues.map(i => i.title).join('; ')) : h('span', { class: 'ok' }, 'No tricks detected'))))))));
+        h('td', {}, u.issues.length ? h('span', { class: 'bad' }, u.issues.map(i => i.title).join('; ')) : h('span', { class: 'ok' }, 'No detected indicators (not a safety guarantee)'))))))));
     if (r.attachments.length) card.append(h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'File name'), h('th', {}, 'Type'), h('th', {}, 'Verdict'))),
       h('tbody', {}, r.attachments.map(a => h('tr', {},
@@ -283,7 +332,7 @@
     const sets = [['URLs', io.urls], ['Domains', io.domains], ['IP addresses', io.ips], ['Email addresses', io.emails], ['Files', io.files], ['Phone numbers', io.phones]].filter(x => x[1].length);
     const lines = sets.flatMap(([k, v]) => [`# ${k}`, ...v.map(x => k === 'Phone numbers' || k === 'Files' ? x : P.defang(x)), '']).join('\n');
     return h('section', { class: 'card' },
-      h('h3', {}, 'Indicators of compromise (IOCs)'),
+      h('h3', {}, 'Candidate indicators for investigation (IOCs)'),
       h('p', { class: 'sub' }, 'Defanged ("evil[.]com") so they cannot be clicked by accident when you share them with your security team.'),
       sets.length ? h('div', { class: 'ioc-grid' }, sets.map(([k, v]) => h('div', {}, h('h4', {}, k), h('ul', {}, v.map(x => h('li', {}, k === 'Phone numbers' || k === 'Files' ? x : P.defang(x))))))) : h('p', { class: 'empty' }, 'No suspicious indicators extracted.'),
       h('div', { class: 'row' },
@@ -295,6 +344,7 @@
   function textReport(r) {
     const L = [];
     L.push('PHISHING ANALYSIS REPORT', `Generated: ${new Date(r.analysedAt).toLocaleString()}`, `Type: ${r.mode === 'voice' ? 'Voice call transcript' : 'Email'}`, `Risk: ${r.score}/100 (${r.level})`, '');
+    if (r.coverage && !r.coverage.complete) L.push('INCOMPLETE ANALYSIS: ' + r.coverage.messages.join(' '), '');
     L.push('WARNING SIGNS');
     r.findings.forEach(f => L.push(`- [+${f.weight}] ${f.title}${f.evidence.length ? ' :: ' + f.evidence.map(e => P.defang(e)).join(' | ') : ''}`));
     L.push('', 'ATTACK PATH (MITRE ATT&CK)');
@@ -313,7 +363,7 @@
         h('span', { class: 'level-pill' }, r.level + ' risk'),
         h('h2', {}, headline(r)),
         h('div', { class: 'stat-row' },
-          h('span', {}, h('b', {}, r.findings.length), ' warning signs'),
+          h('span', {}, h('b', {}, r.findings.filter(f => f.weight > 0).length), ' weighted findings'),
           h('span', {}, h('b', {}, r.urls.filter(u => u.issues.length).length), ' / ', r.urls.length, ' links suspicious'),
           r.mode === 'email' ? h('span', {}, h('b', {}, r.attachments.filter(a => a.issues.length).length), ' risky files') : null,
           r.wasHtml ? h('span', {}, 'HTML source detected') : null)));
@@ -322,7 +372,10 @@
       h('p', { class: 'sub' }, 'Highlighted text triggered a rule. Hover or long-press a highlight to see which.'),
       annotated(r.text, r.spans));
     const note = isExample ? h('p', { class: 'sample-banner' }, 'This is a built-in example so you can see a full report. Clear the box and paste your own message to analyse it.') : null;
-    body.replaceChildren(...[note, verdict, findingsCard(r), evidence, linksCard(r), whatIfCard(r), pathCard(r), actionsCard(r), iocCard(r)].filter(Boolean));
+    const coverageNotice = r.coverage && !r.coverage.complete ? h('section', { class:'card', role:'alert' },
+      h('h3', {}, 'Incomplete analysis — verdict is not reliable'),
+      r.coverage.messages.map(message => h('p', {class:'bad'}, message))) : null;
+    body.replaceChildren(...[note, coverageNotice, verdict, findingsCard(r), evidence, linksCard(r), whatIfCard(r), pathCard(r), actionsCard(r), iocCard(r)].filter(Boolean));
     $('empty-state').hidden = true;
     body.hidden = false;
   }

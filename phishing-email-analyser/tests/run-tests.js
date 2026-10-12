@@ -4,6 +4,10 @@
  * (Only needed for development. Visitors never run this.)
  */
 require('../js/rules.js');
+require('../js/psl-data.js');
+require('../js/public-suffix.js');
+require('../js/confusables-data.js');
+require('../js/domain-security.js');
 require('../js/analyser.js');
 require('../js/guidance.js');
 require('../js/content.js');

@@ -41,13 +41,23 @@
     };
   }
 
+  const bounded = (v,min,max) => typeof v==='number' && Number.isFinite(v) && v>=min && v<=max;
   function valid(o) {
-    return o && o.type === 'pea-summary' && typeof o.alias === 'string' && (o.score === null || typeof o.score === 'number') && o.skills && typeof o.skills === 'object';
+    return o && !Array.isArray(o) && o.type === 'pea-summary' && o.version === 1 &&
+      typeof o.alias === 'string' && o.alias.length <= 256 &&
+      (o.score === null || bounded(o.score,0,100)) &&
+      o.skills && typeof o.skills === 'object' && !Array.isArray(o.skills) &&
+      (!o.accuracy || bounded(o.accuracy,0,1)) &&
+      (!o.flagAccuracy || bounded(o.flagAccuracy,0,1)) &&
+      Object.keys(P.SKILLS).every(k => o.skills[k]==null || bounded(o.skills[k],0,1)) &&
+      (!o.trainingDone || bounded(o.trainingDone,0,9)) &&
+      (!o.trainingTotal || bounded(o.trainingTotal,1,9)) &&
+      (!o.analyses || bounded(o.analyses,0,100000));
   }
   function addTeam(list, sample) {
     let added = 0;
     P.store.update(s => {
-      for (const o of list) {
+      for (const o of list.slice(0, 100)) {
         if (!valid(o)) continue;
         const clean = { alias: String(o.alias).slice(0, 60), dept: String(o.dept || 'Unassigned').slice(0, 60), score: o.score, accuracy: o.accuracy, flagAccuracy: o.flagAccuracy, trainingDone: +o.trainingDone || 0, trainingTotal: +o.trainingTotal || 9, skills: {}, analyses: +o.analyses || 0, sample: !!sample, exportedAt: o.exportedAt };
         for (const k of Object.keys(P.SKILLS)) clean.skills[k] = typeof o.skills[k] === 'number' ? Math.max(0, Math.min(1, o.skills[k])) : null;
@@ -114,7 +124,8 @@
     const fileIn = h('input', { type: 'file', id: 'team-files', accept: '.json,application/json', multiple: true, class: 'visually-hidden' });
     fileIn.addEventListener('change', async () => {
       let added = 0, bad = 0;
-      for (const f of fileIn.files) {
+      for (const f of Array.from(fileIn.files).slice(0, 100)) {
+        if (f.size > 1024 * 1024) { bad++; continue; }
         try { const o = JSON.parse(await f.text()); const n = addTeam(Array.isArray(o) ? o : [o]); added += n; if (!n) bad++; } catch (e) { bad++; }
       }
       P.toast(`Imported ${added} result${added === 1 ? '' : 's'}${bad ? `, ${bad} file(s) not recognised` : ''}`);
@@ -141,7 +152,7 @@
           h('button', { type: 'button', class: 'btn ghost', onclick: () => { addTeam(sampleTeam(), true); render(); } }, 'Load example team'),
           team.length ? h('button', { type: 'button', class: 'btn danger small', onclick: () => { P.store.update(st => { st.team = []; }); render(); } }, 'Clear team data') : null),
         paste,
-        h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn small', onclick: () => { try { const o = JSON.parse(paste.value); const n = addTeam(Array.isArray(o) ? o : [o]); P.toast(n ? `Added ${n} result${n === 1 ? '' : 's'}` : 'That does not look like an exported summary'); if (n) render(); } catch (e) { P.toast('That is not valid JSON. Paste the whole exported summary.'); } } }, 'Add pasted summary'))),
+        h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn small', onclick: () => { try { if (paste.value.length > 1024 * 1024) throw new Error('Summary exceeds size limit'); const o = JSON.parse(paste.value); const n = addTeam(Array.isArray(o) ? o : [o]); P.toast(n ? `Added ${n} result${n === 1 ? '' : 's'}` : 'That does not look like an exported summary'); if (n) render(); } catch (e) { P.toast('That is not valid JSON. Paste the whole exported summary.'); } } }, 'Add pasted summary'))),
       hasSample ? h('p', { class: 'sample-banner' }, 'Showing example data for a fictional team. Clear team data to remove it.') : null,
       team.length ? h('div', { class: 'kpis' },
         P.kpi('People', team.length, `${depts.length} department${depts.length === 1 ? '' : 's'}`),

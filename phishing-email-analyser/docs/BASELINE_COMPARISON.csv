@@ -1,0 +1,10 @@
+synthetic_case,original_2026_10_08_score,enhanced_score,original_link_findings,enhanced_link_findings
+mixed_script_microsoft,45,73,url-login-words | url-punycode,url-login-words | url-punycode | url-unicode-brand-confusable | url-unicode-mixed-script
+whole_script_apple,45,61,url-login-words | url-punycode,url-login-words | url-punycode | url-unicode-brand-confusable
+whole_script_paypal,45,61,url-login-words | url-punycode,url-login-words | url-punycode | url-unicode-brand-confusable
+hosted_tenant_typo,28,56,url-abused-host | url-login-words,url-abused-host | url-hosted-tenant-lookalike | url-login-words
+official_hostname_embedded,22,53,url-login-words,url-embedded-trusted-host | url-login-words
+legitimate_german_idn,37,0,url-punycode,
+legitimate_cyrillic_idn,37,0,url-punycode,
+legitimate_official_domain,10,10,,
+legacy_ascii_lookalike,50,50,url-login-words | url-lookalike,url-login-words | url-lookalike

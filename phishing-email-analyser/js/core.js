@@ -17,7 +17,14 @@
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-      return Object.assign(blank(), s || {});
+      const state = blank();
+      if (!s || typeof s !== 'object' || Array.isArray(s)) return state;
+      if (Array.isArray(s.history)) state.history = s.history.slice(-500);
+      if (s.challenge && s.challenge.answers && typeof s.challenge.answers === 'object') state.challenge.answers = s.challenge.answers;
+      if (s.training && s.training.done && s.training.quiz && typeof s.training.done === 'object' && typeof s.training.quiz === 'object') state.training = {done:s.training.done,quiz:s.training.quiz};
+      if (Array.isArray(s.team)) state.team = s.team.slice(0, 500);
+      if (s.profile && typeof s.profile === 'object') state.profile = {alias:typeof s.profile.alias==='string'?s.profile.alias.slice(0,60):'',dept:typeof s.profile.dept==='string'?s.profile.dept.slice(0,60):''};
+      return state;
     } catch (e) { return blank(); }
   }
   let state = load();

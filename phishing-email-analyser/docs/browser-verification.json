@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "checks": [
+    "initial report",
+    "IDN impersonation evidence",
+    "coverage banner",
+    "body-header spoof rejection",
+    "dashboard navigation",
+    "training navigation",
+    "no page exceptions"
+  ],
+  "qr_native_available": false,
+  "qr_decoder_included": false,
+  "context": "local-asset controlled browser harness; not a deployed-CSP or full penetration test"
+}

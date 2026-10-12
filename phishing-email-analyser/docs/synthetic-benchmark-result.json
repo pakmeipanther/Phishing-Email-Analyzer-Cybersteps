@@ -1,0 +1,67 @@
+{
+  "source": "user-supplied labelled CSV",
+  "dataset_kind": "synthetic",
+  "dataset_sha256": "e059c0e3648818ccc790e270634d0b25878fb6ece92f982cceefa699adab919c",
+  "threshold": 45,
+  "method": "Static rule-score classification, exact deduplication; all conflicting-label values excluded",
+  "count": 20,
+  "duplicates": 0,
+  "invalid": 0,
+  "conflicting_duplicate_labels": 0,
+  "label_distribution": {
+    "phishing": {
+      "count": 10,
+      "score_min": 28,
+      "score_max": 74,
+      "score_mean": 58.5
+    },
+    "legitimate": {
+      "count": 10,
+      "score_min": 0,
+      "score_max": 17,
+      "score_mean": 5.7
+    }
+  },
+  "wilson_95_percent_intervals": {
+    "accuracy": {
+      "low": 0.763864,
+      "high": 0.991119,
+      "n": 20
+    },
+    "precision": {
+      "low": 0.700847,
+      "high": 1,
+      "n": 9
+    },
+    "recall": {
+      "low": 0.595844,
+      "high": 0.982124,
+      "n": 10
+    },
+    "specificity": {
+      "low": 0.72246,
+      "high": 1,
+      "n": 10
+    }
+  },
+  "confusion": {
+    "tp": 9,
+    "tn": 10,
+    "fp": 0,
+    "fn": 1
+  },
+  "accuracy": 0.95,
+  "precision": 1,
+  "recall": 0.9,
+  "specificity": 1,
+  "false_positive_rate": 0,
+  "f1": 0.947368,
+  "warnings": [
+    "Fewer than 100 unique samples; results have high statistical uncertainty.",
+    "This result is from synthetic examples, not real-world accuracy.",
+    "Performance depends strongly on dataset representativeness, time, and label quality.",
+    "A synthetic fixture is not a real-world benchmark. Report its origin accurately.",
+    "Spam vs ham is not synonymous with phishing vs legitimate; non-phishing spam labels are rejected.",
+    "False positives and false negatives must be reviewed by a human."
+  ]
+}

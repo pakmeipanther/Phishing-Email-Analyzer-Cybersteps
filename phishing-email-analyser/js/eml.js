@@ -27,7 +27,10 @@
     'subject': 'Subject', 'date': 'Date', 'authentication-results': 'Authentication-Results',
     'arc-authentication-results': 'ARC-Authentication-Results', 'received-spf': 'Received-SPF'
   };
-  const MAX_DEPTH = 8; // a hostile file could nest parts forever; stop after this many levels
+  const MAX_DEPTH = 8;
+  const MAX_INPUT_BYTES = 25 * 1024 * 1024;
+  const MAX_MIME_PARTS = 250;
+  const MAX_BODY_CHARS = 512 * 1024; // a hostile file could nest parts forever; stop after this many levels
   const HEADER_NAME = '[\\x21-\\x39\\x3b-\\x7e]+'; // printable ASCII except ":" (RFC 5322)
 
   // ── Bytes → text ───────────────────────────────────────────────────────────
@@ -134,10 +137,11 @@
     return parts;
   }
 
-  const newBag = () => ({ headers: null, plain: [], html: [], files: [], inner: [] });
+  const newBag = () => ({ headers: null, plain: [], html: [], files: [], images: [], inner: [], budget: {parts:0, limited:false, chars:0} });
 
   /** Walk one MIME entity (a whole message, or one part of it), filling `bag` with what it finds. */
   function walk(raw, depth, bag) {
+    if (++bag.budget.parts > MAX_MIME_PARTS) { bag.budget.limited = true; return; }
     const [head, body] = splitHead(raw);
     const hs = parseHeaders(head);
     if (!bag.headers) bag.headers = hs;
@@ -153,9 +157,25 @@
       if (depth < MAX_DEPTH) { const sub = newBag(); walk(body, depth + 1, sub); bag.inner.push(sub); }
       return;
     }
+    // Local QR inspection can optionally use small supported inline/attached
+    // images. Never execute attachments or load external image resources.
+    if (/^image\/(png|jpeg|webp|gif)$/.test(ct.type) && bag.images.length < 4) {
+      const encoded = getHeader(hs, 'content-transfer-encoding');
+      if ((encoded||'').toLowerCase().trim() === 'base64' && body.length <= 4*1024*1024) {
+        const bytes = fromBase64(body);
+        if (bytes.length > 0 && bytes.length <= 3*1024*1024) {
+          const data = new Uint8Array(bytes.length);
+          for (let i=0; i<bytes.length; i++) data[i] = bytes.charCodeAt(i)&255;
+          bag.images.push({mime:ct.type, filename:paramText(cd.params,'filename')||paramText(ct.params,'name')||'inline image', bytes:data});
+        }
+      }
+    }
     if (/^text\/(plain|html)$/.test(ct.type) && cd.type !== 'attachment') {
       const text = decodeBody(body, getHeader(hs, 'content-transfer-encoding'), ct.params.charset);
-      (ct.type === 'text/html' ? bag.html : bag.plain).push(text);
+      const remaining = Math.max(0, MAX_BODY_CHARS - bag.budget.chars);
+      if (text.length > remaining) bag.budget.limited = true;
+      if (remaining) (ct.type === 'text/html' ? bag.html : bag.plain).push(text.slice(0, remaining));
+      bag.budget.chars += Math.min(text.length, remaining);
       return;
     }
     const name = paramText(cd.params, 'filename') || paramText(ct.params, 'name');
@@ -204,6 +224,7 @@
    *   files  : attachment names found
    */
   function parseEml(input) {
+    if (input && (input.byteLength || input.length || 0) > MAX_INPUT_BYTES) throw new RangeError('Email exceeds 25 MiB safety limit');
     const raw = toBinary(input).replace(/\r\n?/g, '\n').replace(/^From \S+ +\w{3} \w{3} +\d[^\n]*\n/, ''); // drop an mbox "From " line
 
     let bag = newBag();
@@ -218,6 +239,7 @@
     const plain = bag.plain.map(t => t.trim()).filter(Boolean);
     const html = bag.html.map(htmlToText).filter(Boolean);
     const body = (plain.length ? plain : html).join('\n\n');
+    const htmlSource = bag.html.join('\n\n');
     const source = plain.length ? 'text/plain' : html.length ? 'text/html' : 'none';
 
     // Headers are untrusted too: an encoded word could decode to "x\nReply-To: …" and fake a
@@ -228,7 +250,7 @@
     const names = [...new Set(files.map(oneLine).filter(Boolean))];
 
     const text = [lines.join('\n'), body, names.map(n => 'Attachment: ' + n).join('\n')].filter(Boolean).join('\n\n');
-    return { text, source, files: names };
+    return { text, source, files: names, html: htmlSource, images: bag.images, limited: bag.budget.limited }; 
   }
 
   Object.assign(P, { parseEml });
